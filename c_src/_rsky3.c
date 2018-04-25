@@ -26,7 +26,7 @@
 
 //呼び出せる関数を予め定義？？
 static PyObject *_rsky(PyObject *self, PyObject *args);
-static PyObject *_getf(PyObject *self, PyObject *args);
+//static PyObject *_getf(PyObject *self, PyObject *args);
 
 //calculates the eccentric anomaly (see Seager Exoplanets book:  Murray & Correia eqn. 5 -- see section 3)
 inline double getE(double M, double e)
@@ -51,20 +51,24 @@ static PyObject *_rsky_or_f(PyObject *self, PyObject *args, int f_only)
   double ecc1, ecc2, inc1, inc2, a1, a2, omega1, omega2, per1, per2, tc1, tc2, BIGD = 100.;
   int transittype, nthreads;
   //これが不明
-  npy_intp dims[1]
+  npy_intp dims[3];
   //配列を定義？？
-  PyArrayObject *ts, *ds1, *ds2, *ds3;
+  PyArrayObject *ts, *ds12, *ds13, *ds23;
   //pythonからの引数をこちらの変数に代入
   if(!PyArg_ParseTuple(args,"Oddddddii", &ts, &tc1, &per1, &a1, &inc1, &ecc1, &omega1, &tc2, &per2, &a2, &inc2, &ecc2, &omega2, &transittype, &nthreads)) return NULL;
   //dimsにts(時間)を代入
   dims[0] = PyArray_DIMS(ts)[0];
   //1次元dimsと同じ長さ、tsと同じタイプの配列を作成
-	ds = (PyArrayObject *) PyArray_SimpleNew(1, dims, PyArray_TYPE(ts));
+	ds12 = (PyArrayObject *) PyArray_SimpleNew(1, dims, PyArray_TYPE(ts));
+  ds13 = (PyArrayObject *) PyArray_SimpleNew(1, dims, PyArray_TYPE(ts));
+  ds23 = (PyArrayObject *) PyArray_SimpleNew(1, dims, PyArray_TYPE(ts));
   //時間の配列を作成
   double *t_array = PyArray_DATA(ts);
   //出力用の配列を作成
-	double *output_array = PyArray_DATA(ds);
-　//変数を定義
+	double *array12 = PyArray_DATA(ds12);
+  double *array13 = PyArray_DATA(ds13);
+  double *array23 = PyArray_DATA(ds23);
+  //変数を定義
   //mean motion
   const double n1 = 2.*M_PI/per1;
   const double n2 = 2.*M_PI/per2;
@@ -74,9 +78,10 @@ static PyObject *_rsky_or_f(PyObject *self, PyObject *args, int f_only)
 	#if defined (_OPENMP) && !defined(_OPENACC)
 	omp_set_num_threads(nthreads);	//specifies number of threads (if OpenMP is supported)
 	#endif
-  #if defined (_OPENACC)
-	#pragma acc parallel loop copyin(t_array[:dims[0]]) copyout(output_array[:dims[0]])
-	#elif defined (_OPENMP)
+  //一旦削除
+  //#if defined (_OPENACC)
+	//#pragma acc parallel loop copyin(t_array[:dims[0]]) copyout(output_array[:dims[0]])
+	#if defined (_OPENMP)
 	#pragma omp parallel for
 	#endif
 
@@ -119,8 +124,62 @@ static PyObject *_rsky_or_f(PyObject *self, PyObject *args, int f_only)
 			E2 = getE(M2, ecc2);
 			f2 = 2.*atan(sqrt((1.+ecc2)/(1.-ecc2))*tan(E2/2.));
 		}
-    //2つの軌道の
-    
-
+    //変数を追加
+    double d12, d13, d23;
+    double x2, x3, y2, y3;
+    //場合分けせずにいったんすべて計算する
+    //1体目と2体目のrskyを計算
+    d12 = a1 * (1.0 - ecc1*cos(E1)) * sqrt(1.0-sin(omega1+f1)*sin(omega1+f1)*sin(inc1)*sin(inc1));
+    //1体目と3体目のrskyを計算
+    d13 = a1 * (1.0 - ecc1*cos(E2)) * sqrt(1.0-sin(omega2+f2)*sin(omega2+f2)*sin(inc2)*sin(inc2));
+    //2体目と3体目のxypositionを計算
+    x2 = (cos(omega1) * cos(omega1 + f1) + sin(omega1) * sin(omega1 + f1) * cos(inc1)) * a1 * (1.0 - ecc1*cos(E1));
+    y2 = (sin(omega1) * cos(omega1 + f1) + cos(omega1) * sin(omega1 + f1) * cos(inc1)) * a1 * (1.0 - ecc1*cos(E1));
+    x3 = (cos(omega2) * cos(omega2 + f2) + sin(omega2) * sin(omega2 + f2) * cos(inc2)) * a2 * (1.0 - ecc2*cos(E2));
+    y3 = (sin(omega2) * cos(omega2 + f2) + cos(omega2) * sin(omega2 + f2) * cos(inc2)) * a2 * (1.0 - ecc2*cos(E2));
+    //2体目と3体目のrskyを計算
+    d23 = sqrt((x2 - x3) * (x2 - x3) + (y2 - y3) * (y2 - y3));
+    array12[i] = d12;
+    array13[i] = d13;
+    array23[i] = d23;
+    return Py_BuildValue("d", ds12, ds13, ds23);
   }
 }
+
+static PyObject *_rsky3(PyObject *self, PyObject *args)
+{
+	return _rsky_or_f(self, args, 0);
+}
+
+static char _rsky3_doc[] = "test";
+
+static PyMethodDef _rsky3_methods[] = {{"_rsky3", _rsky3,METH_VARARGS,_rsky3_doc}};
+
+
+#if PY_MAJOR_VERSION >= 3
+	static struct PyModuleDef _rsky3_module = {
+		PyModuleDef_HEAD_INIT,
+		"_rsky3",
+		_rsky3_doc,
+		-1,
+		_rsky3_methods
+	};
+
+	PyMODINIT_FUNC
+	PyInit__rsky(void)
+	{
+		PyObject* module = PyModule_Create(&_rsky3_module);
+		if(!module)
+		{
+			return NULL;
+		}
+		import_array();
+		return module;
+	}
+#else
+	void init_rsky3(void)
+	{
+	  Py_InitModule("_rsky3", _rsky3_methods);
+	  import_array();
+	}
+#endif
